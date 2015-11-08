@@ -25,22 +25,23 @@ from konlpy.utils import pprint
 #worksheets = []
 
 def xlsxToSql():
-    conn = sqlite3.connect("tweets_mers.db")
+    conn = sqlite3.connect("../tweets_mers.db")
     conn.text_factory = str
     cursor = conn.cursor()
 
-    workbook1 = xlrd.open_workbook("./tweets/solr0.xlsx", "r", encoding_override="utf-8")
-    worksheet = workbook1.sheet_by_index(0)
-    nrows = worksheet.nrows
+    for index in range(0,22):
+        workbook1 = xlrd.open_workbook("../tweets/solr%d.xlsx" % index, "r", encoding_override="utf-8")
+        worksheet = workbook1.sheet_by_index(0)
+        nrows = worksheet.nrows
 
-    for row_num in range(nrows):
-        row_value = worksheet.row_values(row_num)
+        for row_num in range(nrows):
+            row_value = worksheet.row_values(row_num)
 
-        if row_num != 0:
-            print row_value[0]
-            cursor.execute('INSERT INTO tweets (docid, date, text) values(?,?,?);', (row_value[0], row_value[3], row_value[7]))
+            if row_num != 0:
+                print row_value[0]
+                cursor.execute('INSERT INTO tweets (docid, date, text) values(?,?,?);', (row_value[0], row_value[3], row_value[7]))
 
-    conn.commit()
+        conn.commit()
     conn.close()
 """
     for index in range(0):
@@ -129,6 +130,10 @@ def remove(text):
 
     return text
 
+#def remove_stopwords()
+
+# 품사처리. 처리함과 동시에 기본형까지 복원해준다.
+# input: text(text after removal), output: tuple list (TERM, POS)
 def pos_tagging(text):
     available_terms_list = []
 
@@ -141,6 +146,19 @@ def pos_tagging(text):
 
     return available_terms_list
 
+def pos_tagging_noun(text):
+    noun_terms_list = []
+
+    twitter = Twitter()
+    pos_list = twitter.pos(text, norm=True, stem=True)
+
+    for item in pos_list:
+        if (item[1] == 'Noun'):
+            noun_terms_list.append(item)
+
+    return noun_terms_list
+
+# 기본형 복 - pos_tagging에서 한번에 다 처리함. 고로 안씀
 def restore_basic_form(word):
     basic_form = requests.get('http://api.openhangul.com/basic?q=%s' % word)
     basic_word = basic_form.json()['basic_word']
@@ -155,16 +173,68 @@ def sentiment(basic_form):
     #except KeyError:
     #    print 'KeyError'
 
+# 단어의 종류만 추려낸다 (단어의 종류, 등장횟수)
+# input: 토큰들 from available_words, noun_words -> output: 엑셀파일 - 단어의 종류와 등장횟수를 리스트업
+def extract_available_words():
+    conn = sqlite3.connect('../tweets_mers.db')
+    cursor5 = conn.cursor()
+    rows = cursor5.execute("select noun_words from tweets")
+
+    ### Extract words
+    # Open csv file to write words kind
+    file_training_result = open('../noun_words_kind.csv', "w")
+    writer = csv.writer(file_training_result, delimiter=',')
+
+    available_words_kind_dic = {}
+    for tuple in rows:  # lists of Available words from database
+        available_words = tuple[0]
+        #print available_words
+        available_words_list = available_words.split(',')
+        #print available_words_list
+        for available_word in available_words_list:  # word instances from database
+            #print available_word
+            # available_words_kind_list = ([available_words_kind], [# of occurrence])
+            available_words_kind_list = available_words_kind_dic.keys() # available_words_kind_list = a set of keys of available_words_kind_dic
+            if available_word not in available_words_kind_list:
+                #print available_word
+                available_words_kind_dic[available_word] = 1
+            else:
+                available_words_kind_dic[available_word] += 1  # Increase the count
+
+    # Write words kind to csv file
+    for key, value in available_words_kind_dic.items():
+        print key, value
+        writer.writerow([key, value])
+
+    conn.commit()
+    conn.close()
+
 
 def main():
     # At the initial stage, use once
-    # xlsxToSql()
+    #xlsxToSql()
 
-    conn = sqlite3.connect('tweets_mers.db')
+    conn = sqlite3.connect('../tweets_mers.db')
     cursor = conn.cursor()
 
+    rows = cursor.execute('select * from tweets')
+
+    ### Iterating over texts, do pre-processing
+    ### Insert text_after_removal into database
+    text_list_after_removal = []
+    cursor1 = conn.cursor()
+    for row in rows:
+        text = row[2]
+        text_after_removal = remove(text)
+        # USE ONLY ONCE for inserting: Insert texts after removal into database
+        cursor1.execute("update tweets SET text_after_removal=? where docid=?", (text_after_removal, row[0]))
+        conn.commit()
+
+
+    conn.close()
+'''
     ### Pull out 'available_words', analyze sentiment scores and
-    unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다']
+    unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
     rows = cursor.execute('select * from tweets')
     cursor3 = conn.cursor()
     for key, row in enumerate(rows):
@@ -191,26 +261,36 @@ def main():
         conn.commit()
 
 
-    conn.close()
 '''
-    rows = cursor.execute('select * from tweets')
 
-    ### Iterating over texts, do pre-processing
-    ### Insert text_after_removal into database
-    text_list_after_removal = []
-    cursor1 = conn.cursor()
-    for row in rows:
-        text = row[2]
-        text_after_removal = remove(text)
-        # USE ONLY ONCE for inserting: Insert texts after removal into database
-        cursor1.execute("update tweets SET text_after_removal=? where docid=?", (text_after_removal, row[0]))
+'''
+
 
     ### Pull out 'text_after_removal', do pos-tagging, get basic forms, save them to 'available_words'
     rows = cursor.execute('select * from tweets')
     cursor2 = conn.cursor()
+    unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
     for row in rows:
-        print row[0]
-        available_basic_terms_tuples = pos_tagging(row[3])  # availablte_terms_list is a list of tuples ('좋', Verb)
+        print row[3]
+        available_basic_terms_tuples = pos_tagging(row[3])  # availablte_terms_list is a list of tuples ('좋다', Verb). 기본형까지 다 복원된 상태
+        available_basic_term_list = []
+        # Gather only text('좋다') from tuple('좋다', Verb)
+        for available_basic_term in available_basic_terms_tuples: # available_term = ('좋', Verb)
+            if available_basic_term[0] not in unavailable_words_list:
+                print available_basic_term[0]
+                available_basic_term_list.append(available_basic_term[0])
+
+        available_basic_terms_into_one_string = ','.join([basic_term for basic_term in available_basic_term_list])
+        #print repr(available_terms_list).decode('unicode-escape')
+        cursor2.execute("update tweets SET available_words=? where docid=?", (available_basic_terms_into_one_string, row[0]))
+
+    #extract_available_words()
+
+    ### EXTRACT ONLY NOUNS: Pull out 'text_after_removal', do pos-tagging, get basic forms, save them to 'available_words'
+    rows = cursor.execute('select * from tweets')
+    cursor2 = conn.cursor()
+    for row in rows:
+        available_basic_terms_tuples = pos_tagging_noun(row[3])  # availablte_terms_list is a list of tuples ('좋', Verb)
         available_basic_term_list = []
         # Gather only text('좋다') from tuple('좋다', Verb)
         for available_basic_term in available_basic_terms_tuples: # available_term = ('좋', Verb)
@@ -218,8 +298,10 @@ def main():
             available_basic_term_list.append(available_basic_term[0])
 
         available_basic_terms_into_one_string = ','.join([basic_term for basic_term in available_basic_term_list])
+        print available_basic_terms_into_one_string
         #print repr(available_terms_list).decode('unicode-escape')
-        cursor2.execute("update tweets SET available_words=? where docid=?", (available_basic_terms_into_one_string, row[0]))
+        cursor2.execute("update tweets SET noun_words=? where docid=?", (available_basic_terms_into_one_string, row[0]))
+        conn.commit()
 '''
 
 
