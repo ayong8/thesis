@@ -1,25 +1,21 @@
 __author__ = 'yong8'
 # -*- coding: utf-8 -*-
 
-import xlrd
-import xlwt
 import csv
 import codecs
 import datetime
-import sqlite3
 import sys
 import re
-import requests
-import json
 import sqlite3
-import simplejson
+import xlrd
+import requests
 from konlpy.tag import Twitter
+import json
+import ast
+import pprint
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
-
-from konlpy.tag import Kkma
-from konlpy.utils import pprint
 
 #workbooks = []
 #worksheets = []
@@ -217,21 +213,86 @@ def main():
     conn = sqlite3.connect('../tweets_mers.db')
     cursor = conn.cursor()
 
+    #conn.interrupt()
+
+
+
     rows = cursor.execute('select * from tweets')
 
     ### Iterating over texts, do pre-processing
     ### Insert text_after_removal into database
+    ### DB에서 text 불러와서 -> text removal -> 곧바로 프로그램 내에서 동사,형용사,명사 추출
+    ### -> 동사와 형용사는 available_words에, 명사는 noun_words에..
+    ### -> 동사와 형용사는 api.txt에서 계산해서 # of words를 db에 저장..
     text_list_after_removal = []
+    file_api_json = open('../api_verbs_adjectives2.json', 'r')
+    file_api_json_load = json.load(file_api_json)
+    print file_api_json_load["sentiments"]
+    #list_api_json = file_api_json.readlines()
     cursor1 = conn.cursor()
-    for row in rows:
-        text = row[2]
-        text_after_removal = remove(text)
-        # USE ONLY ONCE for inserting: Insert texts after removal into database
-        cursor1.execute("update tweets SET text_after_removal=? where docid=?", (text_after_removal, row[0]))
+    # Iterate over all DB instances
+    api_dict = {}
+    for key, row in enumerate(rows):
+        # For the test,
+        if key <= 3:
+            if key >= 0:
+                print row[2]
+                text = row[2]
+                text_after_removal = remove(text)
+                # 각 text에 대해 available words 생성
+                unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
+                # 명사,형용사,명사를 추출하기 위한 pos_tagging
+                available_basic_terms_tuples = pos_tagging(text_after_removal)  # availablte_terms_list is a list of tuples ('좋다', Verb). 기본형까지 다 복원된 상태
+                noun_terms_tuples = pos_tagging_noun(text_after_removal)
+                available_basic_term_list = []
+                noun_terms_list = []
+                # Gather only text('좋다') from tuple('좋다', Verb)
+                for available_basic_term in available_basic_terms_tuples: # available_term = ('좋', Verb)
+                    if available_basic_term[0] not in unavailable_words_list:
+                        print available_basic_term[0]
+                        available_basic_term_list.append(available_basic_term[0])
+                        # Match the word with api json (For sentiment)
+                        pos_count = 0
+                        neg_count = 0
+
+                        for key, value in api_dict.items():
+                            # Convert json(but actually string) to dictionary
+                            if available_basic_term[0] == api_dict['word']:
+                                print api_dict['word']
+                                sentiment = api_dict['sentiment']
+                                print sentiment
+                                # Positive? or Negative?
+                                if sentiment == '긍정':
+                                    pos_count += 1
+                                elif sentiment == '부정':
+                                    neg_count += 1
+
+                # Gather nouns from tuples after pos_tagging
+                for noun_term_tuple in noun_terms_tuples: # available_term = ('좋', Verb)
+                    print noun_term_tuple[0]
+                    noun_terms_list.append(noun_term_tuple[0])
+
+
+        # To insert a list of available_words into DB, make it as one string
+        available_basic_terms_into_one_string = ','.join([basic_term for basic_term in available_basic_term_list])
+        noun_terms_into_one_string = ','.join([noun_term for noun_term in noun_terms_list])
+        #print repr(available_terms_list).decode('unicode-escape')
+        cursor1.execute('update tweets SET available_words=?, noun_words=?, num_of_pos_words=?, num_of_neg_words=? where docid=?', \
+                        (available_basic_terms_into_one_string, noun_terms_into_one_string, pos_count, neg_count, row[0]))
+    # USE ONLY ONCE for inserting: Insert texts after removal into database
+    #cursor1.execute("update tweets SET text_after_removal=? where docid=?", (text_after_removal, row[0]))
+
+
+        # 곧바로 available_words들을 뽑아서(동사, 형용사는 available_words로.. 명사는 noun_words로..)
+        # 개수까지 바로 세서 넣어버린다.
+
         conn.commit()
 
 
     conn.close()
+
+
+
 '''
     ### Pull out 'available_words', analyze sentiment scores and
     unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
@@ -267,6 +328,7 @@ def main():
 
 
     ### Pull out 'text_after_removal', do pos-tagging, get basic forms, save them to 'available_words'
+    ### DB에서 removal text를 불러와서 분석할 때의 코드
     rows = cursor.execute('select * from tweets')
     cursor2 = conn.cursor()
     unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
