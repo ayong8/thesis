@@ -12,13 +12,15 @@ import requests
 from konlpy.tag import Twitter
 import json
 import ast
-import pprint
+import multiprocessing as multi
+
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
 #workbooks = []
 #worksheets = []
+
 
 def xlsxToSql():
     conn = sqlite3.connect("../tweets_mers.db")
@@ -169,6 +171,28 @@ def sentiment(basic_form):
     #except KeyError:
     #    print 'KeyError'
 
+# sentiment api를 json으로 전부 저장한다
+def get_sentiment_json():
+    workbook1 = xlrd.open_workbook("../noun_words.xlsx", "r", encoding_override="utf-8")
+    worksheet = workbook1.sheet_by_index(0)
+    nrows = worksheet.nrows
+
+    with open('../api_nouns.json', 'a') as f:
+        for row_num in range(nrows):
+            if row_num >= 1580:
+                try:
+                    row_value = worksheet.row_values(row_num)
+                    print row_value[0]
+                    sentiment_result = requests.get('http://api.openhangul.com/dic?api_key=mcom7573c20151111223120&q=%s' % row_value[0])
+                    sentiment_result_json = sentiment_result.json()
+                    print sentiment_result_json
+                    json.dump(sentiment_result_json, f)
+                    f.write('\n')
+                    print repr(sentiment_result_json).decode('unicode-escape')
+                except ValueError:
+                    print 'Decoding JSON has failed'
+
+
 # 단어의 종류만 추려낸다 (단어의 종류, 등장횟수)
 # input: 토큰들 from available_words, noun_words -> output: 엑셀파일 - 단어의 종류와 등장횟수를 리스트업
 def extract_available_words():
@@ -192,10 +216,10 @@ def extract_available_words():
             # available_words_kind_list = ([available_words_kind], [# of occurrence])
             available_words_kind_list = available_words_kind_dic.keys() # available_words_kind_list = a set of keys of available_words_kind_dic
             if available_word not in available_words_kind_list:
-                #print available_word
                 available_words_kind_dic[available_word] = 1
             else:
                 available_words_kind_dic[available_word] += 1  # Increase the count
+            print available_word, available_words_kind_dic[available_word]
 
     # Write words kind to csv file
     for key, value in available_words_kind_dic.items():
@@ -205,12 +229,141 @@ def extract_available_words():
     conn.commit()
     conn.close()
 
+def count_num_of_sentiment_words():
+    conn = sqlite3.connect("../tweets_mers.db")
+    cursor = conn.cursor()
+    rows = cursor.execute("select * from tweets")
+
+    #workbook1 = xlrd.open_workbook("../num_of_sentiments.xlsx", "w", encoding_override="utf-8")
+
+    sentiment_by_hour = {}
+
+    for row in rows:
+        #print worksheet.row_values(row_num)
+        #row_value = worksheet.row_values(row_num)
+        #tweet.append(row_value[4])
+
+        #if not row_num == 0:
+        pos_count = row[5]
+        neg_count = row[6]
+        date = datetime.datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S')
+        tt = date.timetuple()
+        # 0:year, 1:month, 2:day, 3:hour, 4:minute, 5:second
+        month = tt[1]
+        day = tt[2]
+        hour = tt[3]
+
+        if day <= 9:
+            day = "0" + str(day)
+        if hour <= 9:
+            hour = "0" + str(hour)
+        date = int(str(month) + str(day) + str(hour))
+
+        #print date
+
+        if date in sentiment_by_hour.keys():
+            print sentiment_by_hour[date][0]
+            sentiment_by_hour[date][0] += int(pos_count)
+            sentiment_by_hour[date][1] += int(neg_count)
+        else:
+            sentiment_by_hour[date] = [pos_count, neg_count]
+
+        print date, sentiment_by_hour[date]
+
+    with open('numberOfSentiments.csv', 'w') as csvfile:
+        writer = csv.writer(csvfile, delimiter=',')
+        for key, value in sorted(sentiment_by_hour.items()):
+            print key, value
+            writer.writerow([key, value])
+
+    conn.commit()
+    conn.close()
+
+# Judge sentiment by comparing # of pos and neg words
+def judge_sentiment():
+    conn = sqlite3.connect("../tweets_mers.db")
+    cursor = conn.cursor()
+    cursor1 = conn.cursor()
+    rows = cursor.execute("select * from tweets")
+
+
+    for row in rows:
+        sentiment = 'neu'
+        if int(row[5]) <= int(row[6]):    # row[5] = # of pos words, row[6] = # of neg words
+            sentiment = 'neg'
+        elif int(row[5]) >= int(row[6]):
+            sentiment = 'pos'
+
+        print sentiment
+        cursor1.execute('update tweets SET sentiment=? where docid=?', (sentiment, row[0]))
+        conn.commit()
+
+    conn.close()
+
+def count_num_of_sentiment_tweets():
+    conn = sqlite3.connect("../tweets_mers.db")
+    cursor = conn.cursor()
+    rows = cursor.execute("select * from tweets")
+
+    #workbook1 = xlrd.open_workbook("../num_of_sentiments.xlsx", "w", encoding_override="utf-8")
+
+    sentiment_by_hour = {}
+
+    for row in rows:
+        #print worksheet.row_values(row_num)
+        #row_value = worksheet.row_values(row_num)
+        #tweet.append(row_value[4])
+        sentiment = row[8]
+        #if not row_num == 0:
+        date = datetime.datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S')
+        tt = date.timetuple()
+        # 0:year, 1:month, 2:day, 3:hour, 4:minute, 5:second
+        month = tt[1]
+        day = tt[2]
+        hour = tt[3]
+
+        if day <= 9:
+            day = "0" + str(day)
+        if hour <= 9:
+            hour = "0" + str(hour)
+        date = int(str(month) + str(day) + str(hour))
+
+        #print date
+
+        if date in sentiment_by_hour.keys():
+            if row[8] == 'pos':
+                sentiment_by_hour[date][0] += 1
+            elif row[8] == 'neg':
+                sentiment_by_hour[date][1] += 1
+        else:
+            if row[8] == 'pos':
+                sentiment_by_hour[date] = [1, 0]
+            elif row[8] == 'neg':
+                sentiment_by_hour[date] = [0, 1]
+
+        print date, sentiment_by_hour[date]
+
+    with open('numberOfSentimentTweets.csv', 'w') as csvfile:
+        writer = csv.writer(csvfile, delimiter=',')
+        for key, value in sorted(sentiment_by_hour.items()):
+            print key, value
+            writer.writerow([key, value])
+
+    conn.commit()
+    conn.close()
+
 
 def main():
     # At the initial stage, use once
     #xlsxToSql()
 
-    conn = sqlite3.connect('../tweets_mers.db')
+    #count_num_of_sentiments()
+    #judge_sentiment()
+    #count_num_of_sentiment_tweets()
+    get_sentiment_json()
+
+'''
+    conn = sqlite3.connect('../tweets_mers.db', check_same_thread=False)
     cursor = conn.cursor()
 
     #conn.interrupt()
@@ -226,56 +379,55 @@ def main():
     ### -> 동사와 형용사는 api.txt에서 계산해서 # of words를 db에 저장..
     text_list_after_removal = []
     file_api_json = open('../api_verbs_adjectives2.json', 'r')
-    file_api_json_load = json.load(file_api_json)
-    print file_api_json_load["sentiments"]
+    api_json = json.load(file_api_json)
+    api_json_words = api_json["words"]
     #list_api_json = file_api_json.readlines()
     cursor1 = conn.cursor()
     # Iterate over all DB instances
     api_dict = {}
+
     for key, row in enumerate(rows):
+        pos_count = 0
+        neg_count = 0
         # For the test,
-        if key <= 3:
-            if key >= 0:
-                print row[2]
-                text = row[2]
-                text_after_removal = remove(text)
-                # 각 text에 대해 available words 생성
-                unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
-                # 명사,형용사,명사를 추출하기 위한 pos_tagging
-                available_basic_terms_tuples = pos_tagging(text_after_removal)  # availablte_terms_list is a list of tuples ('좋다', Verb). 기본형까지 다 복원된 상태
-                noun_terms_tuples = pos_tagging_noun(text_after_removal)
-                available_basic_term_list = []
-                noun_terms_list = []
-                # Gather only text('좋다') from tuple('좋다', Verb)
-                for available_basic_term in available_basic_terms_tuples: # available_term = ('좋', Verb)
-                    if available_basic_term[0] not in unavailable_words_list:
-                        print available_basic_term[0]
-                        available_basic_term_list.append(available_basic_term[0])
-                        # Match the word with api json (For sentiment)
-                        pos_count = 0
-                        neg_count = 0
+        #if key <= 30:
+        #    if key >= 0:
+        #print row[2]
+        text = row[2]
+        text_after_removal = remove(text)
+        # 각 text에 대해 available words 생성
+        unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
+        # 명사,형용사,명사를 추출하기 위한 pos_tagging
+        available_basic_terms_tuples = pos_tagging(text_after_removal)  # availablte_terms_list is a list of tuples ('좋다', Verb). 기본형까지 다 복원된 상태
+        noun_terms_tuples = pos_tagging_noun(text_after_removal)
+        available_basic_term_list = []
+        noun_terms_list = []
+        # Gather only text('좋다') from tuple('좋다', Verb)
+        for available_basic_term in available_basic_terms_tuples: # available_term = ('좋', Verb)
+            if available_basic_term[0] not in unavailable_words_list:
+                #print available_basic_term[0]
+                available_basic_term_list.append(available_basic_term[0])
+                # Match the word with api json (For sentiment)
+                for item in api_json_words["word"]:
+                    if available_basic_term[0] == item["word"]:
+                        sentiment = item['sentiment']
+                        # Positive? or Negative?
+                        if sentiment == '긍정':
+                            pos_count += 1
+                        elif sentiment == '부정':
+                            neg_count += 1
 
-                        for key, value in api_dict.items():
-                            # Convert json(but actually string) to dictionary
-                            if available_basic_term[0] == api_dict['word']:
-                                print api_dict['word']
-                                sentiment = api_dict['sentiment']
-                                print sentiment
-                                # Positive? or Negative?
-                                if sentiment == '긍정':
-                                    pos_count += 1
-                                elif sentiment == '부정':
-                                    neg_count += 1
-
-                # Gather nouns from tuples after pos_tagging
-                for noun_term_tuple in noun_terms_tuples: # available_term = ('좋', Verb)
-                    print noun_term_tuple[0]
-                    noun_terms_list.append(noun_term_tuple[0])
+        # Gather nouns from tuples after pos_tagging
+        for noun_term_tuple in noun_terms_tuples: # available_term = ('좋', Verb)
+            noun_terms_list.append(noun_term_tuple[0])
+        #else:
+        #    break
 
 
         # To insert a list of available_words into DB, make it as one string
         available_basic_terms_into_one_string = ','.join([basic_term for basic_term in available_basic_term_list])
         noun_terms_into_one_string = ','.join([noun_term for noun_term in noun_terms_list])
+        print available_basic_terms_into_one_string
         #print repr(available_terms_list).decode('unicode-escape')
         cursor1.execute('update tweets SET available_words=?, noun_words=?, num_of_pos_words=?, num_of_neg_words=? where docid=?', \
                         (available_basic_terms_into_one_string, noun_terms_into_one_string, pos_count, neg_count, row[0]))
@@ -287,13 +439,10 @@ def main():
         # 개수까지 바로 세서 넣어버린다.
 
         conn.commit()
-
-
     conn.close()
 
 
 
-'''
     ### Pull out 'available_words', analyze sentiment scores and
     unavailable_words_list = ['하다', '있다', '되다', '돼다', '이다', '뭐라다', '되어다', '대다', '나다', '어떻다', '허다']
     rows = cursor.execute('select * from tweets')
