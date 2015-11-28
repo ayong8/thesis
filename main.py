@@ -179,10 +179,12 @@ def get_sentiment_json():
 
     with open('../api_nouns.json', 'a') as f:
         for row_num in range(nrows):
-            if row_num >= 1580:
+            if row_num >= 5754:
                 try:
                     row_value = worksheet.row_values(row_num)
                     print row_value[0]
+                    #mcom757320151023235717
+                    #mcom7573c20151111223120
                     sentiment_result = requests.get('http://api.openhangul.com/dic?api_key=mcom7573c20151111223120&q=%s' % row_value[0])
                     sentiment_result_json = sentiment_result.json()
                     print sentiment_result_json
